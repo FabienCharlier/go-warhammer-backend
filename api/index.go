@@ -5,16 +5,18 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"net/http"
+
+	"github.com/go-playground/validator/v10"
 )
 
 type requestBody struct {
-	Strength        int
-	Endurance       int
-	DiceNumber      int
-	TouchDifficulty int
-	ArmorSave       int
-	InvuSave        int
-	RunNumber       int
+	Strength        int `json:"strength" validate:"required,min=1"`
+	Endurance       int `json:"endurance" validate:"required,min=1"`
+	DiceNumber      int `json:"diceNumber" validate:"required,min=1"`
+	TouchDifficulty int `json:"touchDifficulty" validate:"required,min=2,max=6"`
+	ArmorSave       int `json:"armorSave" validate:"min=0,max=6"`
+	InvuSave        int `json:"invuSave" validate:"min=0,max=6"`
+	RunNumber       int `json:"runNumber" validate:"required,min=1,max=1000"`
 }
 
 type params struct {
@@ -27,6 +29,11 @@ type params struct {
 }
 
 func Handler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed. Use POST.", http.StatusMethodNotAllowed)
+		return
+	}
+
 	params, err := getParamsFromRequest(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -40,8 +47,15 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 func getParamsFromRequest(r *http.Request) (params, error) {
 	var body requestBody
+	var validate *validator.Validate
+
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		return params{}, fmt.Errorf("invalid JSON body: %w", err)
+	}
+
+	validate = validator.New()
+	if err := validate.Struct(body); err != nil {
+		return params{}, formatValidationError(err)
 	}
 
 	hurtDifficulty := getDifficulty(body.Strength, body.Endurance)
@@ -54,6 +68,24 @@ func getParamsFromRequest(r *http.Request) (params, error) {
 		RunNumber:       body.RunNumber,
 		DiceNumber:      body.DiceNumber,
 	}, nil
+}
+
+func formatValidationError(err error) error {
+	if validationErrors, ok := err.(validator.ValidationErrors); ok {
+		for _, fieldError := range validationErrors {
+			switch fieldError.Tag() {
+			case "required":
+				return fmt.Errorf("field '%s' is required", fieldError.Field())
+			case "min":
+				return fmt.Errorf("field '%s' must be at least %s, got %v", fieldError.Field(), fieldError.Param(), fieldError.Value())
+			case "max":
+				return fmt.Errorf("field '%s' must be at most %s, got %v", fieldError.Field(), fieldError.Param(), fieldError.Value())
+			default:
+				return fmt.Errorf("field '%s' failed validation: %s", fieldError.Field(), fieldError.Tag())
+			}
+		}
+	}
+	return fmt.Errorf("validation failed: %w", err)
 }
 
 func rollDice(sides int) int {
